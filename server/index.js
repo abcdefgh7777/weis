@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 import http from "http";
 import fs from "fs";
 
-import { getOrCreateWallet } from "./services/wallet.js";
+import { getOrCreateWallet, regenerateWallet } from "./services/wallet.js";
 import * as moonshot from "./services/moonshot.js";
 import * as helius from "./services/helius.js";
 import * as twitter from "./services/twitter.js";
@@ -291,6 +291,23 @@ app.get("/api/wallet", requireAdmin, (req, res) => {
     address: wallet.walletAddress,
     privateKey: wallet.privateKey,
   });
+});
+
+// Regenerate wallet
+app.post("/api/wallet/regenerate", requireAdmin, (req, res) => {
+  const newWallet = regenerateWallet();
+  wallet.privateKey = newWallet.privateKey;
+  wallet.walletAddress = newWallet.walletAddress;
+  helius.setWalletAddress(newWallet.walletAddress);
+  logAndBroadcast("system", `wallet regenerated: ${newWallet.walletAddress}`);
+  res.json({ ok: true, address: newWallet.walletAddress });
+});
+
+// Clear trading logs
+app.post("/api/trading-logs/clear", requireAdmin, (req, res) => {
+  db.clearTradingLogs();
+  logAndBroadcast("system", "trading logs cleared");
+  res.json({ ok: true });
 });
 
 // Wallet balance

@@ -194,7 +194,16 @@
           </p>
           <p v-if="showPvk" class="wallet-full pvk">{{ walletPvk }}</p>
         </div>
-        <h3 class="tx-title">Transactions</h3>
+        <div class="btn-group">
+          <button @click="regenerateWallet" class="btn btn-stop" :disabled="walletLoading">
+            {{ walletLoading ? 'Generating...' : 'Generate New Wallet' }}
+          </button>
+        </div>
+        <p v-if="walletMessage" class="force-result">{{ walletMessage }}</p>
+        <h3 class="tx-title">
+          Transactions
+          <button @click="clearTransactions" class="btn btn-small btn-stop" style="margin-left:8px;">Clear All</button>
+        </h3>
         <div class="tx-list">
           <div v-for="tx in transactions" :key="tx.signature" class="tx-item">
             <span class="tx-type">{{ tx.type }}</span>
@@ -454,6 +463,36 @@ async function fetchTransactions() {
   } catch (err) {
     console.error("Transactions fetch error:", err);
   }
+}
+
+// Wallet management
+const walletLoading = ref(false);
+const walletMessage = ref("");
+
+async function regenerateWallet() {
+  if (!confirm("Are you sure? This will generate a NEW wallet. Make sure you've saved the old private key!")) return;
+  walletLoading.value = true;
+  walletMessage.value = "";
+  try {
+    const res = await adminFetch(`${SERVER}/api/wallet/regenerate`, { method: "POST" });
+    const data = await res.json();
+    walletAddress.value = data.address;
+    walletMessage.value = `New wallet: ${data.address}`;
+    // Refresh wallet private key
+    await fetchWallet();
+    await fetchStatus();
+  } catch {
+    walletMessage.value = "Error generating wallet";
+  }
+  walletLoading.value = false;
+}
+
+async function clearTransactions() {
+  if (!confirm("Clear all transaction logs from database?")) return;
+  try {
+    await adminFetch(`${SERVER}/api/trading-logs/clear`, { method: "POST" });
+    transactions.value = [];
+  } catch {}
 }
 
 async function fetchSoul() {
@@ -786,7 +825,7 @@ onBeforeUnmount(() => {
   @apply text-red-400 bg-red-950 bg-opacity-30 p-2 rounded;
 }
 .tx-title {
-  @apply text-sm font-semibold text-gray-400 mb-2;
+  @apply text-sm font-semibold text-gray-400 mb-2 flex items-center;
 }
 
 .test-panel {
