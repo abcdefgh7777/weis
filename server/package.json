@@ -1,0 +1,20 @@
+{
+  "name": "wei-agent-server",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "bs58": "^6.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongodb": "^7.1.0",
+    "openai": "^4.78.0",
+    "twitter-api-v2": "^1.18.2",
+    "ws": "^8.18.0"
+  }
+}

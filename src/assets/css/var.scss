@@ -1,0 +1,24 @@
+/*
+  Frosted glass background
+*/
+$glass-bg-color-dark: rgba(#1f1f1f, 0.2);
+// $glass-bg-blur-dark: blur(16px);
+// saturate(150%) increases saturation for more prominent colors
+$glass-bg-blur-dark: saturate(150%) blur(16px);
+
+@mixin glass-bg-dark($border: 0, $filter: true) {
+  background-color: $glass-bg-color-dark;
+
+  @if $filter {
+    backdrop-filter: $glass-bg-blur-dark;
+  }
+
+  @if $border == 1 {
+    // border: 0.1rem solid rgba(#ffffff, 0.1);
+    @apply border-[0.08rem] sm:border-[0.1rem] border-white border-opacity-10 border-solid;
+  }
+
+  // backdrop-filter causes lag, use translateZ to enable GPU rendering
+  transform-style: preserve-3d;
+  transform: translateZ(0);
+}
