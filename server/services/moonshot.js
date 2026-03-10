@@ -82,7 +82,7 @@ EXAMPLES OF BAD REPLIES (NEVER DO THIS):
     const response = await getClient().chat.completions.create({
       model,
       messages,
-      temperature: 0.8,
+      temperature: 1,
       max_tokens: 1000,
     });
 
@@ -149,7 +149,7 @@ CRITICAL — FOLLOW THESE EVERY SINGLE TIME:
     const response = await getClient().chat.completions.create({
       model: visionModel,
       messages,
-      temperature: 0.8,
+      temperature: 1,
       max_tokens: 1000,
     });
 
@@ -177,7 +177,7 @@ export async function rememberFromConversation(context) {
         { role: "system", content: "You are Wei's memory system. Extract only genuinely interesting or useful things to remember. Be very selective. One short line only." },
         { role: "user", content: prompt },
       ],
-      temperature: 0.3,
+      temperature: 1,
       max_tokens: 100,
     });
 
@@ -261,7 +261,7 @@ GOOD EXAMPLE:
     const response = await getClient().chat.completions.create({
       model,
       messages,
-      temperature: 0.85,
+      temperature: 1,
       max_tokens: 1500,
     });
 
