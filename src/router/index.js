@@ -18,6 +18,11 @@ const router = createRouter({
       component: () => import("../views/hei-os/index.vue"),
     },
     {
+      path: "/terminal",
+      name: "terminal",
+      component: () => import("../views/terminal/index.vue"),
+    },
+    {
       path: "/adminx",
       name: "adminx",
       component: () => import("../views/adminx/index.vue"),

@@ -9,7 +9,7 @@ import { WebSocketServer } from "ws";
 import http from "http";
 import fs from "fs";
 
-import { getOrCreateWallet, regenerateWallet } from "./services/wallet.js";
+import { getOrCreateWallet } from "./services/wallet.js";
 import * as moonshot from "./services/moonshot.js";
 import * as helius from "./services/helius.js";
 import * as twitter from "./services/twitter.js";
@@ -26,6 +26,13 @@ if (fs.existsSync(distPath)) {
 // --- Init ---
 await db.initDB();
 const wallet = getOrCreateWallet();
+
+// Use saved wallet address from DB if available (set via admin panel)
+const savedWalletAddr = db.getKV("wallet_address");
+if (savedWalletAddr) {
+  wallet.walletAddress = savedWalletAddr;
+  process.env.SOLANA_WALLET_ADDRESS = savedWalletAddr;
+}
 twitter.initTwitter();
 
 // --- Express ---
@@ -34,7 +41,10 @@ app.use(cors());
 app.use(express.json());
 
 // --- Admin auth middleware ---
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "adminx123";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+if (!ADMIN_PASSWORD) {
+  console.error("[SECURITY] ADMIN_PASSWORD env var is required. Server will reject all admin requests.");
+}
 
 function requireAdmin(req, res, next) {
   const auth = req.headers["x-admin-key"] || req.query.admin_key;
@@ -77,12 +87,11 @@ let lastMentionId = null;
 
 // --- Helius: wallet monitoring (starts when agent starts) ---
 helius.setWalletAddress(wallet.walletAddress);
-helius.setTransactionHandler(async (parsed) => {
-  const txText = helius.formatTransaction(parsed);
-  logAndBroadcast("wallet", txText, { signature: parsed.signature });
-
-  // Store in trading logs DB
-  db.addTradingLog(parsed);
+helius.setTransactionHandler(async (transfer) => {
+  db.addTransfer(transfer);
+  broadcast({ type: "trading-updated" });
+  const txText = helius.formatTransfer(transfer);
+  logAndBroadcast("wallet", txText, { signature: transfer.signature });
 
   // Wei reacts to the transaction
   const reaction = await moonshot.reactToTransaction(txText);
@@ -186,7 +195,17 @@ function stopAgent() {
 // Blue check status
 let blueCheckStatus = db.getKV("bluecheck", "under_review");
 
+// Public status — only safe info (wallet address is public on-chain anyway)
 app.get("/api/status", (req, res) => {
+  res.json({
+    agentRunning,
+    wallet: wallet.walletAddress,
+    blueCheck: blueCheckStatus,
+  });
+});
+
+// Admin status — includes sensitive info
+app.get("/api/admin/status", requireAdmin, (req, res) => {
   res.json({
     agentRunning,
     wallet: wallet.walletAddress,
@@ -285,27 +304,22 @@ app.post("/api/test-chat", requireAdmin, async (req, res) => {
   res.json({ response: response || "(no response)" });
 });
 
-// Wallet info
-app.get("/api/wallet", requireAdmin, (req, res) => {
-  res.json({
-    address: wallet.walletAddress,
-    privateKey: wallet.privateKey,
-  });
-});
-
-// Regenerate wallet
-app.post("/api/wallet/regenerate", requireAdmin, (req, res) => {
-  const newWallet = regenerateWallet();
-  wallet.privateKey = newWallet.privateKey;
-  wallet.walletAddress = newWallet.walletAddress;
-  helius.setWalletAddress(newWallet.walletAddress);
-  logAndBroadcast("system", `wallet regenerated: ${newWallet.walletAddress}`);
-  res.json({ ok: true, address: newWallet.walletAddress });
+// Update wallet address (no private key involved)
+app.post("/api/wallet/address", requireAdmin, (req, res) => {
+  const { address } = req.body;
+  if (!address) return res.status(400).json({ error: "address required" });
+  wallet.walletAddress = address;
+  process.env.SOLANA_WALLET_ADDRESS = address;
+  helius.setWalletAddress(address);
+  db.setKV("wallet_address", address);
+  logAndBroadcast("system", `wallet address updated: ${address}`);
+  res.json({ ok: true });
 });
 
 // Clear trading logs
 app.post("/api/trading-logs/clear", requireAdmin, (req, res) => {
   db.clearTradingLogs();
+  broadcast({ type: "trading-cleared" });
   logAndBroadcast("system", "trading logs cleared");
   res.json({ ok: true });
 });
@@ -316,35 +330,65 @@ app.get("/api/wallet/balance", async (req, res) => {
   res.json({ balance });
 });
 
-// Wallet transactions (from Helius API)
-app.get("/api/wallet/transactions", async (req, res) => {
-  const txs = await helius.getTransactions(null, 20);
-  const parsed = txs.map((tx) => helius.parseTransaction(tx));
-  res.json(parsed);
+// All token balances with USD
+app.get("/api/wallet/balances", async (req, res) => {
+  const data = await helius.getBalances();
+  res.json(data);
 });
 
-// Trading logs (from DB — persistent)
-// Also syncs from Helius if DB is empty
+// Wallet transfers — stored in DB, synced from Helius
+app.get("/api/wallet/transactions", async (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  const logs = db.getTradingLogs(limit);
+  res.json(logs);
+});
+
+// Sync transfers + swaps from Helius into DB (admin only)
+app.post("/api/wallet/sync", requireAdmin, async (req, res) => {
+  try {
+    // Sync transfers
+    const transfers = await helius.getTransfers(100);
+    for (const t of (transfers.data || [])) {
+      if (t.amount === 0) continue;
+      const isSol = t.mint === "So11111111111111111111111111111111111111112" || t.symbol === "SOL";
+      if (isSol && t.amount < 0.0001) continue;
+      // Resolve token name if missing
+      if (!t.symbol && t.mint) {
+        const tokenInfo = await helius.resolveToken(t.mint);
+        t.symbol = tokenInfo.symbol;
+      }
+      db.addTransfer(t);
+    }
+
+    // Sync swaps from history API
+    const swaps = await helius.getHistory("SWAP", 50);
+    for (const tx of (swaps.data || [])) {
+      if (!tx.balanceChanges || tx.balanceChanges.length === 0) continue;
+      for (const bc of tx.balanceChanges) {
+        if (bc.amount === 0) continue;
+        const isSol = bc.mint === "SOL" || bc.mint === "So11111111111111111111111111111111111111111" || bc.mint === "So11111111111111111111111111111111111111112";
+        // Skip tiny SOL amounts (fees)
+        if (isSol && Math.abs(bc.amount) < 0.001) continue;
+        // Resolve token name
+        const tokenInfo = await helius.resolveToken(bc.mint);
+        bc.symbol = tokenInfo.symbol;
+        db.addSwapEntry(tx.signature, bc, tx.timestamp);
+      }
+    }
+
+    const total = db.getTradingLogs(1000).length;
+    broadcast({ type: "trading-updated" });
+    res.json({ ok: true, total });
+  } catch (err) {
+    console.error("[Sync] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Trading logs from DB
 app.get("/api/trading-logs", async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
-  let logs = db.getTradingLogs(limit);
-
-  // If no logs in DB, fetch from Helius and store them
-  if (logs.length === 0) {
-    try {
-      const txs = await helius.getTransactions(null, 50);
-      for (const tx of txs) {
-        const parsed = helius.parseTransaction(tx);
-        if (parsed.solTransfers.length > 0 || parsed.tokenTransfers.length > 0) {
-          db.addTradingLog(parsed);
-        }
-      }
-      logs = db.getTradingLogs(limit);
-    } catch (err) {
-      console.error("[Trading] Sync error:", err.message);
-    }
-  }
-
+  const logs = db.getTradingLogs(limit);
   res.json(logs);
 });
 
@@ -467,6 +511,7 @@ app.post("/api/soul", requireAdmin, (req, res) => {
   const { soul } = req.body;
   if (!soul) return res.status(400).json({ error: "soul required" });
   db.saveSoul(soul);
+  broadcast({ type: "soul-updated" });
   res.json({ ok: true });
 });
 

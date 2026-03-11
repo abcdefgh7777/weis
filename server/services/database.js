@@ -38,7 +38,7 @@ export async function initDB() {
   db.run(`
     CREATE TABLE IF NOT EXISTS trading_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      signature TEXT UNIQUE,
+      signature TEXT,
       type TEXT NOT NULL,
       direction TEXT,
       amount REAL,
@@ -49,6 +49,9 @@ export async function initDB() {
       timestamp TEXT NOT NULL
     )
   `);
+
+  // Add unique index on signature+mint combo (not just signature, swaps have multiple)
+  db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trading_sig_mint ON trading_logs(signature, mint)`);
 
   db.run(`
     CREATE TABLE IF NOT EXISTS kv (
@@ -205,6 +208,58 @@ export function addTradingLog(parsed) {
   saveDB();
 }
 
+// Add transfer from Helius Wallet API
+export function addTransfer(t) {
+  const symbol = t.symbol || (t.mint?.slice(0, 6)) || "???";
+  const ts = typeof t.timestamp === "number" && t.timestamp > 1e12
+    ? new Date(t.timestamp).toISOString()
+    : new Date(t.timestamp * 1000).toISOString();
+
+  db.run(
+    `INSERT OR IGNORE INTO trading_logs (signature, type, direction, amount, token, mint, counterparty, description, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      t.signature,
+      t.type || "TRANSFER",
+      t.direction === "in" ? "IN" : "OUT",
+      t.amount,
+      symbol,
+      t.mint || "",
+      t.counterparty || "",
+      t.description || "",
+      ts,
+    ]
+  );
+  saveDB();
+}
+
+// Add swap balance changes from Helius History API
+export function addSwapEntry(signature, balanceChange, timestamp) {
+  const amount = balanceChange.amount;
+  const direction = amount >= 0 ? "IN" : "OUT";
+  const symbol = balanceChange.symbol || balanceChange.mint?.slice(0, 6) || "???";
+  const ts = typeof timestamp === "number" && timestamp > 1e12
+    ? new Date(timestamp).toISOString()
+    : new Date(timestamp * 1000).toISOString();
+
+  db.run(
+    `INSERT OR IGNORE INTO trading_logs (signature, type, direction, amount, token, mint, counterparty, description, timestamp)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      signature,
+      "SWAP",
+      direction,
+      Math.abs(amount),
+      symbol,
+      balanceChange.mint || "",
+      "",
+      "",
+      ts,
+    ]
+  );
+  saveDB();
+}
+
 export function getTradingLogs(limit = 50) {
   const rows = db.exec(
     `SELECT id, signature, type, direction, amount, token, mint, counterparty, description, timestamp
@@ -212,7 +267,14 @@ export function getTradingLogs(limit = 50) {
   );
   if (!rows.length) return [];
   return rows[0].values.map(([id, signature, type, direction, amount, token, mint, counterparty, description, timestamp]) => ({
-    id, signature, type, direction, amount, token, mint, counterparty, description, timestamp,
+    signature,
+    type,
+    direction: direction === "IN" ? "in" : "out",
+    amount,
+    symbol: token,
+    mint,
+    counterparty,
+    timestamp: Math.floor(new Date(timestamp).getTime() / 1000),
   }));
 }
 

@@ -17,9 +17,9 @@
             :style="{
               top: startBtnTop + 'px',
             }"
-            @click="onClickStart"
           >
-            <button type="button" class="start-btn">START</button>
+            <button type="button" class="start-btn" @click="onClickStart">ROOM</button>
+            <button type="button" class="start-btn terminal-btn" @click="onClickTerminal">TERMINAL</button>
           </div>
         </transition>
       </section>
@@ -49,12 +49,15 @@
 </template>
 
 <script setup>
+import { useRouter } from "vue-router";
 import Experience from "./Experience/Experience";
 
 import { useMatrixLedStore } from "@/stores/matrix-led";
 // import { getBiliBiliInfo } from "@/api/third-party/bilibili";
 import { useLoadingStore } from "@/stores/loading";
 import { useLightControlStore } from "@/stores/light-control";
+
+const router = useRouter();
 
 const matrixLedStore = useMatrixLedStore();
 
@@ -93,6 +96,10 @@ const onClickStart = () => {
   showLoading.value = false;
 
   window.experience.navigation.viewModes.default();
+};
+
+const onClickTerminal = () => {
+  router.push("/terminal");
 };
 
 matrixLedStore.setFansNum(666);
@@ -194,19 +201,22 @@ onBeforeUnmount(() => {
     @apply absolute left-1/2 -translate-x-1/2
       cursor-pointer;
 
-    width: 250px;
-    height: 100px;
+    display: flex;
+    gap: 24px;
 
     transform-style: preserve-3d;
     perspective: 40rem;
 
     .start-btn {
-      @apply text-white text-opacity-40 
-        text-5xl leading-none font-bold align-middle
-        w-full h-full outline-none
+      @apply text-white text-opacity-40
+        text-4xl leading-none font-bold align-middle
+        outline-none
         border-4 border-white border-opacity-10 rounded-2xl
-        relative;
+        relative cursor-pointer;
+      width: 220px;
+      height: 90px;
       transition: all 0.5s;
+      background: none;
 
       transform-style: preserve-3d;
       perspective: 40rem;
@@ -226,20 +236,30 @@ onBeforeUnmount(() => {
       &::before {
         transform: translateZ(-30px);
       }
-    }
 
-    &:hover .start-btn {
-      @apply border-opacity-60 text-opacity-80 scale-105
-        shadow-none;
+      &:hover {
+        @apply border-opacity-60 text-opacity-80 scale-105
+          shadow-none;
 
-      &::before,
-      &::after {
-        @apply opacity-0;
-        transform: translateZ(0);
+        &::before,
+        &::after {
+          @apply opacity-0;
+          transform: translateZ(0);
+        }
+      }
+      &:active {
+        @apply scale-95;
       }
     }
-    &:active .start-btn {
-      @apply scale-95;
+
+    .terminal-btn {
+      @apply text-3xl;
+      border-color: rgba(250, 204, 21, 0.15);
+
+      &:hover {
+        border-color: rgba(250, 204, 21, 0.6);
+        color: #facc15;
+      }
     }
   }
 }

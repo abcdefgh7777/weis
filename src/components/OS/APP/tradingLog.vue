@@ -31,24 +31,24 @@
       </div>
 
       <div class="log-header">
-        <span class="col col-time">TIME</span>
         <span class="col col-type">TYPE</span>
         <span class="col col-dir">DIR</span>
         <span class="col col-amount">AMOUNT</span>
         <span class="col col-token">TOKEN</span>
+        <span class="col col-time">TIME</span>
       </div>
 
       <div class="log-list" ref="logRef">
         <div
-          v-for="log in tradingLogs"
-          :key="log.id"
-          :class="['log-row', log.direction === 'IN' || log.direction === 'BUY' ? 'incoming' : 'outgoing']"
+          v-for="(log, i) in tradingLogs"
+          :key="log.signature + i"
+          :class="['log-row', log.direction === 'in' ? 'incoming' : 'outgoing']"
         >
+          <span :class="['col', 'col-type', log.type === 'SWAP' ? 'swap-type' : '']">{{ log.type || 'TRANSFER' }}</span>
+          <span class="col col-dir">{{ log.direction === 'in' ? '+' : '-' }}</span>
+          <span class="col col-amount">{{ shortAmount(log.amount) }}</span>
+          <span class="col col-token">{{ log.symbol || '???' }}</span>
           <span class="col col-time">{{ formatTime(log.timestamp) }}</span>
-          <span class="col col-type">{{ log.type }}</span>
-          <span class="col col-dir">{{ log.direction || '-' }}</span>
-          <span class="col col-amount">{{ formatAmount(log.amount) }}</span>
-          <span class="col col-token">{{ log.token || 'SOL' }}</span>
         </div>
         <div v-if="tradingLogs.length === 0" class="empty">
           no trading activity yet — wei is still learning
@@ -84,7 +84,7 @@ const censoredWallet = computed(() => {
 
 function formatTime(ts) {
   if (!ts) return "-";
-  const d = new Date(ts);
+  const d = new Date(ts * 1000);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString();
 }
 
@@ -93,12 +93,22 @@ function formatAmount(amt) {
   return Number(amt).toFixed(4);
 }
 
+function shortAmount(amt) {
+  if (amt === null || amt === undefined) return "-";
+  const n = Number(amt);
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(4);
+}
+
 async function fetchData() {
   try {
     const [statusRes, balanceRes, logsRes] = await Promise.all([
       fetch(`${SERVER}/api/status`),
       fetch(`${SERVER}/api/wallet/balance`),
-      fetch(`${SERVER}/api/trading-logs?limit=100`),
+      fetch(`${SERVER}/api/wallet/transactions?limit=50`),
     ]);
     const status = await statusRes.json();
     walletAddress.value = status.wallet || "";
@@ -122,6 +132,12 @@ function connectWs() {
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
     if (msg.type === "activity" && msg.data.type === "wallet") {
+      fetchData();
+    }
+    if (msg.type === "trading-cleared") {
+      tradingLogs.value = [];
+    }
+    if (msg.type === "trading-updated") {
       fetchData();
     }
   };
@@ -237,11 +253,12 @@ onBeforeUnmount(() => {
   .col {
     color: #888;
   }
-  .col-time { width: 160px; flex-shrink: 0; color: #555; }
-  .col-type { width: 100px; flex-shrink: 0; }
-  .col-dir { width: 50px; flex-shrink: 0; font-weight: bold; }
-  .col-amount { width: 120px; flex-shrink: 0; }
+  .col-type { width: 80px; flex-shrink: 0; text-transform: uppercase; font-size: 10px; }
+  .swap-type { color: #c084fc !important; }
+  .col-dir { width: 25px; flex-shrink: 0; font-weight: bold; }
+  .col-amount { width: 100px; flex-shrink: 0; }
   .col-token { flex: 1; }
+  .col-time { width: 140px; flex-shrink: 0; color: #555; text-align: right; }
 
   .empty {
     @apply text-center py-8;

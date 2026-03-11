@@ -188,33 +188,31 @@
         <h2>Wallet</h2>
         <div class="wallet-info">
           <p class="wallet-label">Address</p>
-          <p class="wallet-full">{{ walletAddress }}</p>
-          <p class="wallet-label">Private Key
-            <button @click="showPvk = !showPvk" class="btn btn-small">{{ showPvk ? 'Hide' : 'Show' }}</button>
-          </p>
-          <p v-if="showPvk" class="wallet-full pvk">{{ walletPvk }}</p>
+          <div class="input-group">
+            <input v-model="walletAddress" placeholder="Wallet address..." />
+            <button @click="saveWalletAddress" class="btn">Save</button>
+          </div>
+          <p v-if="walletSaveMsg" class="force-result">{{ walletSaveMsg }}</p>
+          <p v-if="walletBalance !== null" class="wallet-balance">{{ walletBalance.toFixed(4) }} SOL</p>
         </div>
-        <div class="btn-group">
-          <button @click="regenerateWallet" class="btn btn-stop" :disabled="walletLoading">
-            {{ walletLoading ? 'Generating...' : 'Generate New Wallet' }}
-          </button>
-        </div>
-        <p v-if="walletMessage" class="force-result">{{ walletMessage }}</p>
         <h3 class="tx-title">
-          Transactions
-          <button @click="clearTransactions" class="btn btn-small btn-stop" style="margin-left:8px;">Clear All</button>
+          Transfers
+          <span style="display:flex;gap:4px;margin-left:8px;">
+            <button @click="syncTransactions" class="btn btn-small btn-start" :disabled="txLoading">
+              {{ txLoading ? 'Syncing...' : 'Sync from Helius' }}
+            </button>
+            <button @click="clearTransactions" class="btn btn-small btn-stop">Clear All</button>
+          </span>
         </h3>
         <div class="tx-list">
-          <div v-for="tx in transactions" :key="tx.signature" class="tx-item">
-            <span class="tx-type">{{ tx.type }}</span>
-            <div v-for="t in tx.solTransfers" :key="t.from || t.to" class="tx-detail">
-              {{ t.direction }} {{ t.amount.toFixed(4) }} SOL
-            </div>
-            <div v-for="t in tx.tokenTransfers" :key="t.mint" class="tx-detail">
-              {{ t.direction }} {{ t.amount }} {{ t.mint.slice(0, 8) }}...
-            </div>
+          <div v-for="(tx, i) in transactions" :key="tx.signature + i" class="tx-item">
+            <span :class="['tx-type-badge', tx.type === 'SWAP' ? 'tx-swap' : 'tx-transfer']">{{ tx.type || 'TRANSFER' }}</span>
+            <span :class="['tx-dir', tx.direction === 'in' ? 'tx-in' : 'tx-out']">{{ tx.direction === 'in' ? '+' : '-' }}</span>
+            <span class="tx-amount">{{ shortAmount(tx.amount) }} {{ tx.symbol || '???' }}</span>
+            <span class="tx-counter" v-if="tx.counterparty">{{ tx.counterparty?.slice(0, 8) }}...</span>
+            <span class="tx-time">{{ formatTxTime(tx.timestamp) }}</span>
           </div>
-          <div v-if="transactions.length === 0" class="empty">No transactions</div>
+          <div v-if="transactions.length === 0" class="empty">No transfers — click "Sync from Helius" to fetch</div>
         </div>
       </section>
     </div>
@@ -227,37 +225,42 @@ const WS_URL = import.meta.env.DEV
   ? "ws://localhost:3001/ws"
   : `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
 
-const ADMIN_PASSWORD = "adminx123";
-
-// Helper for authenticated fetch
+// Helper for authenticated fetch — uses the password the user typed, never hardcoded
 function adminFetch(url, opts = {}) {
-  opts.headers = { ...opts.headers, "x-admin-key": ADMIN_PASSWORD };
+  const key = sessionStorage.getItem("wei-admin-key") || "";
+  opts.headers = { ...opts.headers, "x-admin-key": key };
   return fetch(url, opts);
 }
 const authenticated = ref(false);
 const password = ref("");
 const loginError = ref(false);
 
-function login() {
-  if (password.value === ADMIN_PASSWORD) {
-    authenticated.value = true;
-    sessionStorage.setItem("wei-admin", "1");
-    loginError.value = false;
-  } else {
+async function login() {
+  if (!password.value.trim()) return;
+  try {
+    const res = await fetch(`${SERVER}/api/admin/status`, {
+      headers: { "x-admin-key": password.value },
+    });
+    if (res.ok) {
+      sessionStorage.setItem("wei-admin-key", password.value);
+      authenticated.value = true;
+      loginError.value = false;
+    } else {
+      loginError.value = true;
+    }
+  } catch {
     loginError.value = true;
   }
 }
 
 // Check if already logged in this session
-if (sessionStorage.getItem("wei-admin") === "1") {
+if (sessionStorage.getItem("wei-admin-key")) {
   authenticated.value = true;
 }
 
 const agentRunning = ref(false);
 const twitterConnected = ref(false);
 const walletAddress = ref("");
-const walletPvk = ref("");
-const showPvk = ref(false);
 const activities = ref([]);
 const transactions = ref([]);
 const tweetText = ref("");
@@ -395,7 +398,7 @@ function copyWallet() {
 // API calls
 async function fetchStatus() {
   try {
-    const res = await adminFetch(`${SERVER}/api/status`);
+    const res = await adminFetch(`${SERVER}/api/admin/status`);
     const data = await res.json();
     agentRunning.value = data.agentRunning;
     twitterConnected.value = data.twitterConnected;
@@ -446,15 +449,6 @@ async function fetchActivities() {
   }
 }
 
-async function fetchWallet() {
-  try {
-    const res = await adminFetch(`${SERVER}/api/wallet`);
-    const data = await res.json();
-    walletPvk.value = data.privateKey;
-  } catch (err) {
-    console.error("Wallet fetch error:", err);
-  }
-}
 
 async function fetchTransactions() {
   try {
@@ -465,26 +459,63 @@ async function fetchTransactions() {
   }
 }
 
-// Wallet management
-const walletLoading = ref(false);
-const walletMessage = ref("");
+const walletBalance = ref(null);
+const walletSaveMsg = ref("");
+const txLoading = ref(false);
 
-async function regenerateWallet() {
-  if (!confirm("Are you sure? This will generate a NEW wallet. Make sure you've saved the old private key!")) return;
-  walletLoading.value = true;
-  walletMessage.value = "";
+function formatTxTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return d.toLocaleDateString() + " " + d.toLocaleTimeString();
+}
+
+function shortAmount(amt) {
+  if (amt === null || amt === undefined) return "-";
+  const n = Number(amt);
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(4);
+}
+
+async function fetchBalance() {
   try {
-    const res = await adminFetch(`${SERVER}/api/wallet/regenerate`, { method: "POST" });
+    const res = await fetch(`${SERVER}/api/wallet/balance`);
     const data = await res.json();
-    walletAddress.value = data.address;
-    walletMessage.value = `New wallet: ${data.address}`;
-    // Refresh wallet private key
-    await fetchWallet();
-    await fetchStatus();
+    if (data.balance !== null) walletBalance.value = data.balance;
+  } catch {}
+}
+
+async function syncTransactions() {
+  txLoading.value = true;
+  try {
+    await adminFetch(`${SERVER}/api/wallet/sync`, { method: "POST" });
+    await fetchTransactions();
+  } catch {}
+  txLoading.value = false;
+}
+
+async function saveWalletAddress() {
+  if (!walletAddress.value.trim()) return;
+  try {
+    const res = await adminFetch(`${SERVER}/api/wallet/address`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: walletAddress.value.trim() }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      walletSaveMsg.value = "wallet address saved";
+      fetchBalance();
+      fetchTransactions();
+    } else {
+      walletSaveMsg.value = "error saving";
+    }
   } catch {
-    walletMessage.value = "Error generating wallet";
+    walletSaveMsg.value = "error saving";
   }
-  walletLoading.value = false;
+  setTimeout(() => { walletSaveMsg.value = ""; }, 3000);
 }
 
 async function clearTransactions() {
@@ -683,7 +714,7 @@ onMounted(() => {
   fetchStatus();
   fetchActivities();
   fetchTransactions();
-  fetchWallet();
+  fetchBalance();
   fetchSoul();
   fetchMemory();
   connectWs();
@@ -788,12 +819,20 @@ onBeforeUnmount(() => {
 .wallet-full {
   @apply text-xs text-gray-500 mb-3 break-all;
 }
-.tx-list { @apply space-y-2 max-h-64 overflow-y-auto; }
+.tx-list { @apply space-y-1 max-h-80 overflow-y-auto; }
 .tx-item {
-  @apply bg-gray-800 rounded p-2 text-sm;
+  @apply bg-gray-800 rounded px-3 py-2 text-xs flex items-center gap-2;
 }
-.tx-type { @apply text-yellow-500 font-bold text-xs; }
-.tx-detail { @apply text-gray-300 text-xs mt-1; }
+.tx-type-badge { @apply text-xs font-bold uppercase w-16 shrink-0; }
+.tx-swap { @apply text-purple-400; }
+.tx-transfer { @apply text-gray-500; }
+.tx-dir { @apply font-bold text-xs w-5 shrink-0; }
+.tx-in { @apply text-green-400; }
+.tx-out { @apply text-red-400; }
+.tx-amount { @apply text-white font-medium shrink-0; }
+.tx-counter { @apply text-gray-500 truncate; }
+.tx-time { @apply text-gray-600 shrink-0 ml-auto text-xs; }
+.wallet-balance { @apply text-yellow-400 text-sm font-medium mt-1; }
 
 .empty { @apply text-gray-600 text-sm text-center py-4; }
 
